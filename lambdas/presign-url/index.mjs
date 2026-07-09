@@ -1,50 +1,49 @@
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { DynamoDBClient, PutItemCommand } from '@aws-sdk/client-dynamodb';
+import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { randomUUID } from 'node:crypto';
 
-const s3 = new S3Client({ region: process.env.AWS_REGION });
-
-const BUCKET = process.env.BUCKET_NAME;
-const KEY_PREFIX = process.env.KEY_PREFIX ?? '';
-const EXPIRES_IN = Number(process.env.EXPIRES_IN ?? 300);
-
-const CORS_HEADERS = {
-  'Access-Control-Allow-Origin': process.env.ALLOWED_ORIGIN ?? '*',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
-};
-
-const json = (statusCode, body) => ({
-  statusCode,
-  headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
-  body: JSON.stringify(body),
-});
+const s3Client = new S3Client();
+const dynamoClient = new DynamoDBClient();
 
 export const handler = async (event) => {
-  const method = event?.requestContext?.http?.method ?? 'POST';
-  if (method === 'OPTIONS') {
-    return { statusCode: 204, headers: CORS_HEADERS, body: '' };
-  }
-
-  let filename;
-  try {
-    const raw = event?.isBase64Encoded
-      ? Buffer.from(event.body ?? '', 'base64').toString('utf8')
-      : event?.body ?? '';
-    ({ filename } = JSON.parse(raw || '{}'));
-  } catch {
-    return json(400, { message: 'Invalid JSON body' });
-  }
+  const { filename } = JSON.parse(event.body);
 
   if (!filename) {
-    return json(400, { message: 'filename is required' });
-  }
+    return {
+      statusCode: 400,
+      body: JSON.stringify('Missing filename'),
+    };
+  };
 
-  const key = `${KEY_PREFIX}${filename}`;
+  const filekey = `${randomUUID()}-${filename}`;
+
+  const command = new PutObjectCommand({
+    Bucket: 'upload-study',
+    Key: filekey,
+  });
+
+  const dynamoCommand = new PutItemCommand({
+    TableName: 'upload-study',
+    Item: {
+      filekey: { S: filekey },
+      originalFilename: { S: filename },
+      uploadDate: { S: new Date().toJSON() },
+      status: { S: 'pending' },
+    }
+  });
+
   const signedUrl = await getSignedUrl(
-    s3,
-    new PutObjectCommand({ Bucket: BUCKET, Key: key }),
-    { expiresIn: EXPIRES_IN },
+    s3Client,
+    command,
+    { expiresIn: 60 }
   );
 
-  return json(200, { signedUrl });
+  await dynamoClient.send(dynamoCommand);
+
+  const response = {
+    statusCode: 200,
+    body: JSON.stringify({ signedUrl }),
+  };
+  return response;
 };

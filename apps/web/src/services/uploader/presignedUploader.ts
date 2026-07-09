@@ -24,7 +24,7 @@ export function createPresignedUploader({ getPresignedUrl }: PresignedOptions): 
         },
         onUploadProgress: (progress) => {
           if (progress.total) {
-            const percentage = Math.round((progress.loaded * 100) / progress.total);
+            const percentage = Math.round(progress.loaded / progress.total);
             onProgress(percentage, { bytesSent: progress.loaded, bytesTotal: progress.total })
           }
         },
